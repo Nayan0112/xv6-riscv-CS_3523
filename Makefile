@@ -1,4 +1,3 @@
-#git test
 K=kernel
 U=user
 
@@ -131,6 +130,7 @@ UPROGS=\
 	$U/_echo\
 	$U/_forktest\
 	$U/_grep\
+	$U/_hello\
 	$U/_init\
 	$U/_kill\
 	$U/_ln\
@@ -146,6 +146,7 @@ UPROGS=\
 	$U/_logstress\
 	$U/_forphan\
 	$U/_dorphan\
+	$U/_p1_test\
 
 fs.img: mkfs/mkfs README $(UPROGS)
 	mkfs/mkfs fs.img README $(UPROGS)

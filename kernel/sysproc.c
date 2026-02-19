@@ -107,3 +107,48 @@ sys_uptime(void)
   release(&tickslock);
   return xticks;
 }
+
+//adding hello()
+uint64
+sys_hello(void)
+{
+  const char* s = "hello from the kernel!\n";
+  printf("%s", s);
+  return 0;
+}
+
+uint64
+sys_getppid(void){
+  //all the orphans are adopted by INIT
+  //so it doesnt matter if we have to check
+  //if the parent is dead or not 
+  //one possible problem might be at the time of 
+  //execution the parent might have been active 
+  //but later got killed?
+  return kgetppid();
+}
+
+uint64
+sys_getnumchild(void){
+  uint64 p;
+  argaddr(0, &p);
+  return kgetnumchild(p);
+}
+
+uint64
+sys_getsyscount(void){
+  return myproc()->sysCount;
+}
+
+uint64
+sys_getchildsyscount(void){
+
+  int pid;
+  argint(0, &pid);
+  return kgetchildsyscount(pid);
+}
+
+uint64
+sys_getpid2(void){
+  return myproc()->pid;
+}

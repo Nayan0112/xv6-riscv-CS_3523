@@ -24,6 +24,21 @@ int getpid(void);
 char* sys_sbrk(int,int);
 int pause(int);
 int uptime(void);
+//adding hello()
+//-> basic implemtation with prints hello through a syscall
+int hello(void);
+//adding getppid() -> returns the PID of the parent process
+// -> if the parent process is killed then the PID of init is returned
+int getppid(void);
+//adding getnumchild() -> returns the number of child a parent has
+int getnumchild(void);
+//adding getsyscount() -> returns the total number of systemcalls invoked including getsyscount
+int getsyscount(void);
+//adding getchildsyscount() -> returns the total number of systemcalls invoked including getsyscount of the child
+int getchildsyscount(int);
+int getpid2(void);
+
+
 
 // ulib.c
 int stat(const char*, struct stat*);

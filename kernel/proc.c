@@ -145,7 +145,7 @@ found:
   memset(&p->context, 0, sizeof(p->context));
   p->context.ra = (uint64)forkret;
   p->context.sp = p->kstack + PGSIZE;
-
+  p->sysCount = 0;              //initialising with system calls  invoked to 0
   return p;
 }
 
@@ -687,4 +687,89 @@ procdump(void)
     printf("%d %s %s", p->pid, state, p->name);
     printf("\n");
   }
+}
+
+int
+kgetppid(void)
+{
+  struct proc *pp = myproc();
+  //if the proc has no parents or
+  //is init itself then it should
+  //return -1
+
+  if(pp == initproc){
+    return -1;
+  }
+
+  acquire(&wait_lock);
+
+  //Since the kkill() command does not 
+  //call the reparent() on the spot
+  //and waits for parent to exit in 
+  //some cases the parent might already 
+  //have been killed and the child 
+  //calls getppid(), that might return the
+  //killed parent pid which is incorrect.
+  
+  if( pp->parent == initproc ||
+      killed(pp->parent) == 1){
+  
+    release(&wait_lock);
+    return -1;
+  }
+  int ppid = pp->parent->pid;
+  release(&wait_lock);
+  return ppid;
+}
+
+
+int
+kgetnumchild(uint64 addr)
+{
+  struct proc *cp;
+  int numKids;
+  struct proc *p = myproc();
+
+  acquire(&wait_lock);
+  //making sure the child isn't in exit() or switch()
+  //scan through table looking for the children
+  numKids = 0;
+  for(cp = proc; cp < &proc[NPROC]; cp++){
+    if( cp->parent == p){
+      acquire(&cp->lock);
+      if( cp->killed != 1 &&
+          cp->state != ZOMBIE
+        )
+        numKids++;
+      release(&cp->lock);
+    }
+  }
+  release(&wait_lock);
+  return numKids;
+}
+
+int 
+kgetchildsyscount(int PID)
+{
+  struct proc *cp;
+  struct proc *pp = myproc();
+  int count = -1;
+  acquire(&wait_lock);
+  for(cp = proc; cp < &proc[NPROC]; cp++){
+    if( 
+        cp->parent == pp
+      ){
+      //locking the process to check if it is 
+      //in zombie state and preserve the syscalls
+      acquire(&cp->lock);
+      if( cp->pid == PID ){
+        count = cp->sysCount;
+        release(&cp->lock);
+        break;
+      }
+      release(&cp->lock);
+    }
+  }
+  release(&wait_lock);
+  return count;
 }

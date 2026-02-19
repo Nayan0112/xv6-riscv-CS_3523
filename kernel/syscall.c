@@ -102,6 +102,18 @@ extern uint64 sys_link(void);
 extern uint64 sys_mkdir(void);
 extern uint64 sys_close(void);
 
+//adding a simple hello()
+extern uint64 sys_hello(void);
+//adding a getppid()
+extern uint64 sys_getppid(void);
+//adding a getnumchild()
+extern uint64 sys_getnumchild(void);
+//adding getsyscount()
+extern uint64 sys_getsyscount(void);
+//adding getchildsyscount()
+extern uint64 sys_getchildsyscount(void);
+extern uint64 sys_getpid2();
+
 // An array mapping syscall numbers from syscall.h
 // to the function that handles the system call.
 static uint64 (*syscalls[])(void) = {
@@ -126,6 +138,14 @@ static uint64 (*syscalls[])(void) = {
 [SYS_link]    sys_link,
 [SYS_mkdir]   sys_mkdir,
 [SYS_close]   sys_close,
+
+//doing something
+[SYS_hello]   sys_hello,
+[SYS_getppid] sys_getppid,
+[SYS_getnumchild] sys_getnumchild,
+[SYS_getsyscount] sys_getsyscount,
+[SYS_getchildsyscount] sys_getchildsyscount,
+[SYS_getpid2] sys_getpid2,
 };
 
 void
@@ -136,6 +156,9 @@ syscall(void)
 
   num = p->trapframe->a7;
   if(num > 0 && num < NELEM(syscalls) && syscalls[num]) {
+    //updating the sysCount this will include 
+    //the call from getsyscount itself
+    p->sysCount++;
     // Use num to lookup the system call function for num, call it,
     // and store its return value in p->trapframe->a0
     p->trapframe->a0 = syscalls[num]();

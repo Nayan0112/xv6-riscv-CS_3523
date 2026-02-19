@@ -19,4 +19,10 @@
 #define SYS_unlink 18
 #define SYS_link   19
 #define SYS_mkdir  20
-#define SYS_close  21
+#define SYS_close  21   
+#define SYS_hello 22    
+#define SYS_getppid 23  //adding getppid
+#define SYS_getnumchild 24  //adding getnumchild
+#define SYS_getsyscount 25 //adding getsyscount
+#define SYS_getchildsyscount 26 //adding getchildsyscount
+#define SYS_getpid2 27
