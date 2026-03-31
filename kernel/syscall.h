@@ -26,3 +26,6 @@
 #define SYS_getsyscount 25 //adding getsyscount
 #define SYS_getchildsyscount 26 //adding getchildsyscount
 #define SYS_getpid2 27
+#define SYS_getpinfo 28
+#define SYS_getlevel 29
+#define SYS_getmlfqinfo 30

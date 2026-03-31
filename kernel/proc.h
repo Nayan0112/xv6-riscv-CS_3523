@@ -92,6 +92,12 @@ struct proc {
   int xstate;                  // Exit status to be returned to parent's wait
   int pid;                     // Process ID
   int sysCount;                // Counts the number of system calls invoked
+  int pticks;                  // Number of ticks consumed in current time slice
+  int qticks[LEVELS];          // Total ticks per level, i.e 0,1,..,LEVELS-1
+  int tsched;                  // Number of times the process have been re-scheduled inclusive of the initial schedule
+  int dSysCount;               // Number of system calls made during the current time-slice
+  int qlevel;                  // current priority queue level
+  
 
   // wait_lock must be held when using this:
   struct proc *parent;         // Parent process
@@ -106,3 +112,21 @@ struct proc {
   struct inode *cwd;           // Current directory
   char name[16];               // Process name (debugging)
 };
+
+
+//queues for processes
+struct queue {
+  /*queue contains a list of processes*/
+  struct spinlock lock;
+  struct proc* qproc[NPROC];
+  int tail;
+};
+
+//multilevel priority queue
+// struct pqueue {
+//   /*contains the queues in mlpq*/
+//   struct spinlock queue_lock;
+//   struct queue pq[LEVELS];
+// };
+
+

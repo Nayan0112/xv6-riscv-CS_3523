@@ -152,3 +152,32 @@ uint64
 sys_getpid2(void){
   return myproc()->pid;
 }
+
+uint64
+sys_getpinfo(void){
+  struct proc* p = myproc();
+  acquire(&p->lock);
+  printf("\n --- PID:%d STATS ---\n", p->pid);
+  printf("Total number of ticks per qlevel\n");
+  for(int i = 0; i < LEVELS; i++){
+    printf("LEVEL:%d\t->%d\n", i, p->qticks[i]);
+  }
+  printf("Number of times rescheduled:%d\n", p->tsched);
+  printf("Number of syscount:%d\n", p->sysCount);
+  release(&p->lock);
+  return 0;
+}
+
+uint64
+sys_getlevel(void){
+  return myproc()->qlevel;
+}
+
+uint64
+sys_getmlfqinfo(void){
+  int pid;
+  uint64 info_ptr;
+  argint(0, &pid);
+  argaddr(1, &info_ptr);
+  return kgetmlfqinfo(pid, info_ptr);
+}

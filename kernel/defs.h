@@ -8,6 +8,7 @@ struct spinlock;
 struct sleeplock;
 struct stat;
 struct superblock;
+struct mlfqinfo;
 
 // bio.c
 void            binit(void);
@@ -92,6 +93,7 @@ struct cpu*     mycpu(void);
 struct proc*    myproc();
 void            procinit(void);
 void            scheduler(void) __attribute__((noreturn));
+void            SC_MLFQ(void) __attribute__((noreturn));
 void            sched(void);
 void            sleep(void*, struct spinlock*);
 void            userinit(void);
@@ -104,6 +106,11 @@ void            procdump(void);
 int             kgetppid(void);
 int             kgetnumchild(uint64);
 int             kgetchildsyscount(int);
+void            push_proc(struct proc*);
+void            pop_proc(int);
+void            event_tick(struct proc*);
+void            qinit(void);
+int             kgetmlfqinfo(int pid, uint64 info_ptr);
 
 // swtch.S
 void            swtch(struct context*, struct context*);

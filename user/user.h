@@ -1,6 +1,7 @@
 #define SBRK_ERROR ((char *)-1)
 
 struct stat;
+struct mlfqinfo;
 
 // system calls
 int fork(void);
@@ -37,6 +38,9 @@ int getsyscount(void);
 //adding getchildsyscount() -> returns the total number of systemcalls invoked including getsyscount of the child
 int getchildsyscount(int);
 int getpid2(void);
+int getpinfo(void);
+int getlevel(void);
+int getmlfqinfo(int pid, struct mlfqinfo* info);
 
 
 

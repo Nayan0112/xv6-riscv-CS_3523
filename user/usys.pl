@@ -48,3 +48,6 @@ entry("getnumchild");
 entry("getsyscount");
 entry("getchildsyscount");
 entry("getpid2");
+entry("getpinfo");
+entry("getlevel");
+entry("getmlfqinfo");

@@ -5,12 +5,19 @@
 #include "spinlock.h"
 #include "proc.h"
 #include "defs.h"
+#include "stat.h"
+
+//#define log 0
 
 struct cpu cpus[NCPU];
 
 struct proc proc[NPROC];
 
 struct proc *initproc;
+
+struct queue pqueue[LEVELS];
+
+int ticks_max[LEVELS];
 
 int nextpid = 1;
 struct spinlock pid_lock;
@@ -25,6 +32,55 @@ extern char trampoline[]; // trampoline.S
 // memory model when using p->parent.
 // must be acquired before any p->lock.
 struct spinlock wait_lock;
+
+
+void
+qinit(void)
+{
+  for(int i = 0; i < LEVELS; i++){
+    pqueue[i].tail = 0;
+  }
+  ticks_max[0] = 2;
+  for(int i = 1; i < LEVELS; i++){
+    ticks_max[i] = ticks_max[i-1] * 2;
+  }
+}
+
+// pushes a process to the designated queue
+// the value in p->qlevel must be updated else
+// it will be pushed to the prev assigned queue
+void
+push_proc(struct proc* p)
+{
+  //acquire(&p->lock);
+  int level = p->qlevel;
+  struct queue* q = &pqueue[level];
+  acquire(&q->lock);
+  int tail = q->tail;
+  if(tail < NPROC){
+    q->qproc[tail] = p;
+    tail++;
+  }
+  q->tail = tail;
+  release(&q->lock);
+  //release(&p->lock);
+}
+
+//pops a process from the current queue
+void
+pop_proc(int level)
+{
+  struct queue* q = &pqueue[level];
+  if(q->tail < 1) return;
+  //acquire(&q->lock);
+  if(q->tail > 0){
+    for(int i = 1; i < q->tail; i++){
+      q->qproc[i-1] = q->qproc[i];
+    }
+  }
+  q->tail--;
+  //release(&q->lock);
+}
 
 // Allocate a page for each process's kernel stack.
 // Map it high in memory, followed by an invalid
@@ -146,6 +202,18 @@ found:
   p->context.ra = (uint64)forkret;
   p->context.sp = p->kstack + PGSIZE;
   p->sysCount = 0;              //initialising with system calls  invoked to 0
+  
+  
+  p->qlevel = 0;
+  p->pticks = 0;
+  for(int i = 0; i < LEVELS; i++){
+    p->qticks[i] = 0;
+  }
+  p->tsched = 0;
+  p->dSysCount = 0;
+
+  //push_proc(p);
+  
   return p;
 }
 
@@ -228,6 +296,8 @@ userinit(void)
 
   p->state = RUNNABLE;
 
+  push_proc(p);
+
   release(&p->lock);
 }
 
@@ -300,6 +370,9 @@ kfork(void)
 
   acquire(&np->lock);
   np->state = RUNNABLE;
+
+  push_proc(np);
+
   release(&np->lock);
 
   return pid;
@@ -462,6 +535,140 @@ scheduler(void)
   }
 }
 
+void
+SC_MLFQ(void)
+{
+  struct proc* p;
+  struct cpu* c = mycpu();
+
+  c->proc = 0;
+  static int last_mod128 = 0;
+  for(;;){
+    intr_on();
+    intr_off();
+
+    //push all the processes to level 0 after 128 ticks
+    acquire(&tickslock);
+    uint gtick = ticks;
+    release(&tickslock);
+
+    if( cpuid() == 0 && 
+        gtick > 0 &&
+        gtick % 128 == 0 &&
+        gtick != last_mod128){
+
+      last_mod128 = gtick;
+      //push all the process to level0
+      /*
+      NOTE: there is a slight chance during
+          this global boost a program is in
+          running state might get left out 
+          and it might happen repeatatively 
+          which might degrade the performance
+          of the process.
+          Thus it is modified such that we 
+          dont deprive the running process
+      */
+      for(int i = 0; i < LEVELS; i++){
+        struct queue* q = &pqueue[i];
+        acquire(&q->lock);
+        q->tail = 0;
+        release(&q->lock);
+      }
+
+
+      for(p = proc; p < &proc[NPROC]; p++){
+        acquire(&p->lock);
+        if( p->state != UNUSED  ||
+            p->state != ZOMBIE  ||
+            p->state != SLEEPING){
+              
+          // reinit
+          p->qlevel = 0;
+          p->pticks = 0;
+          p->dSysCount = p->sysCount;
+          acquire(&pqueue[0].lock);
+          if(pqueue[0].tail < NPROC){
+            pqueue[0].qproc[pqueue[0].tail] = p;
+            pqueue[0].tail++;
+          } 
+          release(&pqueue[0].lock);
+        }
+        release(&p->lock);
+      }
+    }
+
+    int found = 0;
+
+    for(int i = 0; i < LEVELS; i++){
+      struct queue* q = &pqueue[i];
+      acquire(&q->lock);
+      
+      // if queue is not empty push the process 
+      // check if the process is runnable and 
+      // schedule it 
+
+      if(q->tail > 0){
+
+#ifdef log
+        /*
+        [LOGGING]
+        getting the queue details
+        prints level wise queue of pids
+        */
+        acquire(&wait_lock);
+        for(int i = 0; i < LEVELS; i++){
+          printf("\n[");
+          for(int j = 0; j < pqueue[i].tail; j++){
+            printf("%d ", pqueue[i].qproc[j]->pid);
+          }
+          printf("]");
+        }
+        release(&wait_lock);
+
+#endif
+        p = q->qproc[0];
+
+        pop_proc(i);
+        release(&q->lock);
+
+        acquire(&p->lock);
+        
+        if(p->state == RUNNABLE){
+          // logging
+#ifdef log
+
+          printf("\n[SCHEDULER]\tcpuid:%d\tpid:%d\n",cpuid(), p->pid);
+#endif
+
+          p->state = RUNNING;
+          c->proc = p;
+          p->tsched++;
+      
+          swtch(&c->context, &p->context);
+
+          c->proc = 0;
+          found = 1;
+
+          //going back to level 0 each successful run
+          release(&p->lock);
+          break;
+
+        }else{
+
+          release(&p->lock);
+        }
+      }else{
+        release(&q->lock);
+      }
+    }
+
+    if(found == 0){
+      asm volatile("wfi");
+    }
+  }
+}
+
 // Switch to scheduler.  Must hold only p->lock
 // and have changed proc->state. Saves and restores
 // intena because intena is a property of this
@@ -497,6 +704,65 @@ yield(void)
   acquire(&p->lock);
   p->state = RUNNABLE;
   sched();
+  release(&p->lock);
+}
+
+void
+event_tick(struct proc* p)
+{
+
+  int should_yield = 0;
+
+  acquire(&p->lock);
+  int ptick = ++(p->pticks);
+  int level = p->qlevel;
+  p->qticks[level]++;
+  int delta_S = p->sysCount - p->dSysCount;
+
+  // used up the current time slice alloted
+  // for the given pq level
+
+  //logging
+#ifdef log
+  printf("\n[EVENT TICK]\tcpuid:%d\tpid:%d\ttick:%d\tds:%d\tlevel:%d\tqlt:%d", cpuid(), p->pid, p->pticks, delta_S, level, p->qticks[level]);
+#endif
+
+  if(p->pticks >= ticks_max[level]){
+    /*
+    updating the ticks after the process uses up all its time slice
+    reinit the dysyscall to the current num of syscalls so that later
+    delta_S can be caluclated
+    */
+    p->pticks = 0;
+    p->dSysCount = p->sysCount;
+    if(delta_S < ptick && level < (LEVELS)-1){
+      //demote
+      p->qlevel++;
+    }
+    // p->state = RUNNABLE;
+    // push_proc(p);
+    // sched();
+    should_yield = 1;
+
+  }else{
+    struct queue* q;
+    for(int i = 0; i < level; i++){
+      q = &pqueue[i];
+      acquire(&q->lock);
+      if(q->tail){
+        should_yield = 1;
+        release(&q->lock);
+        break;
+      }
+      release(&q->lock);
+    }
+  }
+
+  if(should_yield){
+    p->state = RUNNABLE;
+    push_proc(p);
+    sched();
+  }
   release(&p->lock);
 }
 
@@ -580,6 +846,7 @@ wakeup(void *chan)
       acquire(&p->lock);
       if(p->state == SLEEPING && p->chan == chan) {
         p->state = RUNNABLE;
+        push_proc(p);
       }
       release(&p->lock);
     }
@@ -772,4 +1039,36 @@ kgetchildsyscount(int PID)
   }
   release(&wait_lock);
   return count;
+}
+
+int
+kgetmlfqinfo(int pid, uint64 info_ptr)
+{
+  int found = 0;
+  struct proc* p;
+  struct mlfqinfo info;
+  acquire(&wait_lock);
+  for(p = proc; p < &proc[NPROC]; p++){
+    acquire(&p->lock);
+    if(p->pid == pid && p->state != UNUSED){
+      info.level = p->qlevel;
+      info.times_scheduled = p->tsched;
+      info.total_syscalls = p->sysCount;
+      for(int i = 0; i < LEVELS; i++){
+        info.ticks[i] = p->qticks[i];
+      }
+      found = 1;
+      release(&p->lock);
+      break;
+    }
+    release(&p->lock);
+  }
+  release(&wait_lock);
+
+  if(!found) return -1;
+
+  if(copyout(myproc()->pagetable, info_ptr, (char*)&info, sizeof(info))< 0){
+    return -1;
+  }
+  return 0;
 }
