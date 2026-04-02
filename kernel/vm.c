@@ -8,14 +8,105 @@
 #include "proc.h"
 #include "fs.h"
 
+#define NFRAMES ((PHYSTOP - KERNBASE) / PGSIZE)
+#define MAX_SP 256
+
+char swap_space[MAX_SP][PGSIZE];
+uint8 swap_mask[MAX_SP];
+struct spinlock swap_l;
+
 /*
  * the kernel's page table.
  */
 pagetable_t kernel_pagetable;
 
+struct frame {
+  uint8 is_used;
+  struct proc* p;
+  uint64 va;
+  uint8 rb;
+};
+
+
+
+struct frametable_t{
+  struct frame f[NFRAMES];
+  struct spinlock lock;
+  int clock_p;
+}frametable;
+
 extern char etext[];  // kernel.ld sets this to end of kernel code.
 
 extern char trampoline[]; // trampoline.S
+
+int alloc_swap_index(){
+
+  acquire(&swap_l);
+  for(int i = 0; i < MAX_SP; i++) {
+    if(swap_mask[i] == 0) {
+      swap_mask[i] = 1;
+      release(&swap_l);
+      return i;
+    }
+  }
+  release(&swap_l);
+  return -1;
+}
+
+void free_swap_index(int index) {
+  acquire(&swap_l);
+  swap_mask[index] = 0;
+  release(&swap_l);
+}
+
+uint64
+evict_page(){
+  acquire(&frametable.lock);
+  for(int pass = LEVELS - 1; pass >= 0; pass--){
+    for(int i = 0; i < 2*NFRAMES; i++){
+      struct frame *v = &frametable.f[frametable.clock_p];
+  
+      frametable.clock_p = (frametable.clock_p + 1) % NFRAMES;
+
+      if(v->is_used && v->p && v->p->qlevel == pass){
+        if(v->rb){
+          v->rb = 0;
+          continue;
+        }
+        uint64 va = v->va;
+        struct proc *p = v->p;
+        pte_t *pte = walk(p->pagetable, va, 0);
+        if(pte == 0 || !(*pte & PTE_V)){
+          panic("pte not valid");
+        }
+        uint64 pa = PTE2PA(*pte);
+        int swap_index = alloc_swap_index();
+
+        if(swap_index == -1)
+          panic("OOM");
+
+        acquire(&swap_l);
+        memmove(swap_space[swap_index], (void*)pa, PGSIZE);
+        release(&swap_l);
+
+        *pte = (swap_index << 10) | PTE_S;
+        *pte &= ~PTE_V;
+
+        p->page_evicted++;
+        p->pages_swapped_out++;
+        p->resident_pages--;
+
+        v->is_used = 0;
+        v->p = 0;
+        release(&frametable.lock);
+        return pa;
+      
+      }
+    }
+  }
+  release(&frametable.lock);
+  panic("cannot evict");
+}
 
 // Make a direct-map page table for the kernel.
 pagetable_t
@@ -454,17 +545,61 @@ vmfault(pagetable_t pagetable, uint64 va, int read)
 {
   uint64 mem;
   struct proc *p = myproc();
+  p->page_faults++;
 
   if (va >= p->sz)
     return 0;
   va = PGROUNDDOWN(va);
+
+  pte_t *pte = walk(pagetable, va , 1);
+
+  if(pte && (*pte & PTE_S)){
+    int swap_index = (*pte) >> 10;
+    uint64 mem = (uint64)kalloc();
+
+    if(mem == 0){
+      mem = evict_page(); 
+    }
+
+    acquire(&frametable.lock);
+    struct frame *f = &frametable.f[((uint64)mem - KERNBASE) / PGSIZE];
+    f->is_used = 1;
+    f->p = p;
+    f->va = va;
+    f->rb = 1;
+    release(&frametable.lock);
+
+    memmove((void*)mem, swap_space[swap_index], PGSIZE);
+
+    free_swap_index(swap_index); 
+    *pte = PA2PTE(mem) | PTE_V | PTE_U | PTE_R | PTE_W;
+
+    p->pages_swapped_in++; 
+    p->resident_pages++;
+    return mem;
+  }
+
   if(ismapped(pagetable, va)) {
     return 0;
   }
   mem = (uint64) kalloc();
-  if(mem == 0)
-    return 0;
+
+  if(mem == 0){
+    mem = evict_page();
+  }
   memset((void *) mem, 0, PGSIZE);
+
+  acquire(&frametable.lock);
+  struct frame *f = &frametable.f[(mem - KERNBASE) / PGSIZE];
+  f->is_used = 1;
+  f->p = p;
+  f->va = va;
+  f->rb = 1;
+  release(&frametable.lock);
+
+  p->resident_pages++;
+
+
   if (mappages(p->pagetable, va, PGSIZE, mem, PTE_W|PTE_U|PTE_R) != 0) {
     kfree((void *)mem);
     return 0;

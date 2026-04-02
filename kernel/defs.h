@@ -9,6 +9,7 @@ struct sleeplock;
 struct stat;
 struct superblock;
 struct mlfqinfo;
+struct vmstats;
 
 // bio.c
 void            binit(void);
@@ -111,6 +112,7 @@ void            pop_proc(int);
 void            event_tick(struct proc*);
 void            qinit(void);
 int             kgetmlfqinfo(int pid, uint64 info_ptr);
+int             kgetvmstats(int pid, uint64 info_ptr);
 
 // swtch.S
 void            swtch(struct context*, struct context*);
@@ -179,6 +181,7 @@ int             copyin(pagetable_t, char *, uint64, uint64);
 int             copyinstr(pagetable_t, char *, uint64, uint64);
 int             ismapped(pagetable_t, uint64);
 uint64          vmfault(pagetable_t, uint64, int);
+uint64          evict_page();
 
 // plic.c
 void            plicinit(void);

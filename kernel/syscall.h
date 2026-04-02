@@ -29,3 +29,4 @@
 #define SYS_getpinfo 28
 #define SYS_getlevel 29
 #define SYS_getmlfqinfo 30
+#define SYS_getvmstats 31

@@ -2,6 +2,7 @@
 
 struct stat;
 struct mlfqinfo;
+struct vmstats;
 
 // system calls
 int fork(void);
@@ -41,6 +42,7 @@ int getpid2(void);
 int getpinfo(void);
 int getlevel(void);
 int getmlfqinfo(int pid, struct mlfqinfo* info);
+int getvmstats(int pid, struct vmstats* info);
 
 
 

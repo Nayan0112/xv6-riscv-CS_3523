@@ -51,3 +51,4 @@ entry("getpid2");
 entry("getpinfo");
 entry("getlevel");
 entry("getmlfqinfo");
+entry("getvmstats");

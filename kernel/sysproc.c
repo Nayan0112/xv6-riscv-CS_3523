@@ -181,3 +181,12 @@ sys_getmlfqinfo(void){
   argaddr(1, &info_ptr);
   return kgetmlfqinfo(pid, info_ptr);
 }
+
+uint64
+sys_getvmstats(void){
+  int pid;
+  uint64 info_ptr;
+  argint(0, &pid);
+  argaddr(1, &info_ptr);
+  return kgetvmstats(pid, info_ptr);
+}

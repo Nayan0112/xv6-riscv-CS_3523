@@ -17,3 +17,13 @@ struct mlfqinfo {
   int times_scheduled;
   int total_syscalls;
 };
+
+struct vmstats
+{
+  int page_faults;
+  int page_evicted;
+  int pages_swapped_in;
+  int pages_swapped_out;
+  int resident_pages;
+};
+

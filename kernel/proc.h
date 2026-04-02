@@ -111,6 +111,13 @@ struct proc {
   struct file *ofile[NOFILE];  // Open files
   struct inode *cwd;           // Current directory
   char name[16];               // Process name (debugging)
+
+  int page_faults;
+  int page_evicted;
+  int pages_swapped_in;
+  int pages_swapped_out;
+  int resident_pages;
+  
 };
 
 

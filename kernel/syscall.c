@@ -116,6 +116,7 @@ extern uint64 sys_getpid2();
 extern uint64 sys_getpinfo(void);
 extern uint64 sys_getlevel(void);
 extern uint64 sys_getmlfqinfo(void);
+extern uint64 sys_getvmstats(void);
 
 // An array mapping syscall numbers from syscall.h
 // to the function that handles the system call.
@@ -152,6 +153,7 @@ static uint64 (*syscalls[])(void) = {
 [SYS_getpinfo] sys_getpinfo,
 [SYS_getlevel] sys_getlevel,
 [SYS_getmlfqinfo] sys_getmlfqinfo,
+[SYS_getvmstats] sys_getvmstats,
 };
 
 void

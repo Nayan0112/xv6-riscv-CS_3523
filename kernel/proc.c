@@ -8,6 +8,25 @@
 #include "stat.h"
 
 //#define log 0
+#define NFRAMES ((PHYSTOP - KERNBASE) / PGSIZE)
+#define MAX_SP 128
+
+struct frame {
+  uint8 is_used;
+  struct proc* p;
+  uint64 va;
+  uint8 rb;
+};
+
+struct frametable_t {
+  struct frame f[NFRAMES];
+  struct spinlock lock;
+  int clock_p;
+};
+
+extern struct frametable_t frametable;
+extern char swap_space[MAX_SP][PGSIZE];
+extern uint8 swap_mask[MAX_SP];
 
 struct cpu cpus[NCPU];
 
@@ -344,6 +363,39 @@ kfork(void)
     release(&np->lock);
     return -1;
   }
+
+  for(uint64 va = 0; va < np->sz; va += PGSIZE){
+    pte_t *pte = walk(np->pagetable, va, 0);
+
+    if(pte && (*pte & PTE_S)) {
+      int swap_index = (*pte) >> 10;
+      uint64 mem = (uint64) kalloc();
+      if(mem == 0){
+        mem = evict_page();
+      }
+      acquire(&frametable.lock);
+
+      struct frame *f = &frametable.f[(mem - KERNBASE) / PGSIZE];
+      f->is_used = 1;
+      f->p = np;
+      f->va = va;
+      f->rb = 1;
+
+      release(&frametable.lock);
+
+      memmove((void*)mem, swap_space[swap_index], PGSIZE);
+
+    }else if(pte && (*pte & PTE_V)){
+      uint64 pa = PTE2PA(*pte);
+      acquire(&frametable.lock);
+      struct frame *f = &frametable.f[(pa - KERNBASE) / PGSIZE];
+      f->is_used = 1;
+      f->p = np;
+      f->va = va;
+      f->rb = 1;
+      release(&frametable.lock);
+    }
+  }
   np->sz = p->sz;
 
   // copy saved user registers.
@@ -579,8 +631,8 @@ SC_MLFQ(void)
 
       for(p = proc; p < &proc[NPROC]; p++){
         acquire(&p->lock);
-        if( p->state != UNUSED  ||
-            p->state != ZOMBIE  ||
+        if( p->state != UNUSED  &&
+            p->state != ZOMBIE  &&
             p->state != SLEEPING){
               
           // reinit
@@ -1062,6 +1114,36 @@ kgetmlfqinfo(int pid, uint64 info_ptr)
       break;
     }
     release(&p->lock);
+  }
+  release(&wait_lock);
+
+  if(!found) return -1;
+
+  if(copyout(myproc()->pagetable, info_ptr, (char*)&info, sizeof(info))< 0){
+    return -1;
+  }
+  return 0;
+}
+
+
+int
+kgetvmstats(int pid, uint64 info_ptr)
+{
+  int found = 0;
+  struct proc* p;
+  struct vmstats info;
+  acquire(&wait_lock);
+  for(p = proc; p < &proc[NPROC]; p++){
+    if(p->pid == pid && p->state != UNUSED){
+      info.page_faults = p->page_faults;
+      info.page_evicted = p->page_evicted;
+      info.pages_swapped_in = p->pages_swapped_in;
+      info.pages_swapped_out = p->pages_swapped_out;
+      info.resident_pages = p->resident_pages;
+
+      found = 1;
+      break;
+    }
   }
   release(&wait_lock);
 
