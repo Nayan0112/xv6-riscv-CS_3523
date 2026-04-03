@@ -105,5 +105,10 @@ kalloc(void)
 
   if(r)
     memset((char*)r, 5, PGSIZE); // fill with junk
+
+  if(!r){
+    uint64 pa = evict_page();
+    if(pa != 0) return (void*)pa;
+  }
   return (void*)r;
 }

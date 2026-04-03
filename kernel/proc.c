@@ -10,6 +10,7 @@
 //#define log 0
 #define NFRAMES ((PHYSTOP - KERNBASE) / PGSIZE)
 #define MAX_SP 128
+#define SWAP_BASE PHYSTOP
 
 struct frame {
   uint8 is_used;
@@ -25,7 +26,6 @@ struct frametable_t {
 };
 
 extern struct frametable_t frametable;
-extern char swap_space[MAX_SP][PGSIZE];
 extern uint8 swap_mask[MAX_SP];
 
 struct cpu cpus[NCPU];
@@ -231,6 +231,12 @@ found:
   p->tsched = 0;
   p->dSysCount = 0;
 
+  p->page_evicted = 0;
+  p->page_faults = 0;
+  p->pages_swapped_in = 0;
+  p->pages_swapped_out = 0;
+  p->resident_pages = 0;
+
   //push_proc(p);
   
   return p;
@@ -358,12 +364,13 @@ kfork(void)
   }
 
   // Copy user memory from parent to child.
-  if(uvmcopy(p->pagetable, np->pagetable, p->sz) < 0){
+  if(uvmcopy(p->pagetable, np->pagetable, p->sz, np) < 0){
     freeproc(np);
     release(&np->lock);
     return -1;
   }
 
+  //COPY SWAP SPACE TOO
   for(uint64 va = 0; va < np->sz; va += PGSIZE){
     pte_t *pte = walk(np->pagetable, va, 0);
 
@@ -383,9 +390,13 @@ kfork(void)
 
       release(&frametable.lock);
 
-      memmove((void*)mem, swap_space[swap_index], PGSIZE);
+      memmove((void*)mem, get_swap_addr(swap_index), PGSIZE);
+
+      pte_t *child_pte = walk(np->pagetable, va, 1);
+      *child_pte = PA2PTE(mem) | PTE_V | PTE_U | PTE_R | PTE_W;
 
     }else if(pte && (*pte & PTE_V)){
+
       uint64 pa = PTE2PA(*pte);
       acquire(&frametable.lock);
       struct frame *f = &frametable.f[(pa - KERNBASE) / PGSIZE];
