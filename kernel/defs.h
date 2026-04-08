@@ -183,6 +183,7 @@ int             ismapped(pagetable_t, uint64);
 uint64          vmfault(pagetable_t, uint64, int);
 uint64          evict_page();
 void*           get_swap_addr(int);
+void            sinit();
 
 // plic.c
 void            plicinit(void);

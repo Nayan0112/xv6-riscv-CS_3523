@@ -27,7 +27,11 @@ struct frame {
   uint8 rb;
 };
 
-
+void sinit(){
+  for(int i=0; i < MAX_SP; i++){
+    swap_mask[i] = 0;
+  }
+}
 
 struct frametable_t{
   struct frame f[NFRAMES];
@@ -39,7 +43,7 @@ extern char etext[];  // kernel.ld sets this to end of kernel code.
 
 extern char trampoline[]; // trampoline.S
 
-void* get_swap_addr(int index) {
+void* get_swap_addr(int index){
     return (void*)(SWAP_BASE + (uint64)index * PGSIZE);
 }
 
@@ -73,7 +77,7 @@ evict_page(){
       struct frame *v = &frametable.f[frametable.clock_p];
       if(v->is_used && v->p){
 
-        if(v->p->state == RUNNING && v->p != myproc()) {
+        if(v->p->state == RUNNING && v->p != myproc()){
           frametable.clock_p = (frametable.clock_p + 1) % NFRAMES;
           continue;
         }
@@ -91,6 +95,7 @@ evict_page(){
       frametable.clock_p = (frametable.clock_p + 1) % NFRAMES;
     }
   }
+  //debug
   if(to_evict < 0)
     panic("cannot evict");
   struct frame *v = &frametable.f[to_evict];
@@ -98,6 +103,7 @@ evict_page(){
   uint64 va = v->va;
   struct proc *p = v->p;
   pte_t *pte = walk(p->pagetable, va, 0);
+  //debug
   if(pte == 0 || !(*pte & PTE_V)){
     panic("pte not valid 3");
   }
@@ -148,6 +154,7 @@ kvmmake(void)
   // map kernel data and the physical RAM we'll make use of.
   kvmmap(kpgtbl, (uint64)etext, (uint64)etext, PHYSTOP-(uint64)etext, PTE_R | PTE_W);
 
+  // map the swap space 
   kvmmap(kpgtbl, SWAP_BASE, SWAP_BASE, MAX_SP * PGSIZE, PTE_R | PTE_W);
   // map the trampoline for trap entry/exit to
   // the highest virtual address in the kernel.
@@ -455,6 +462,7 @@ uvmcopy(pagetable_t old, pagetable_t new, uint64 sz, struct proc* np)
       f->va = i;
       f->rb = 1;
       release(&frametable.lock);
+      np->resident_pages++;
     } 
 
     else if((*pte & PTE_S)) {
@@ -481,6 +489,7 @@ uvmcopy(pagetable_t old, pagetable_t new, uint64 sz, struct proc* np)
       f->va = i;
       f->rb = 1;
       release(&frametable.lock);
+      np->resident_pages++;
     }
     else {
       continue; 

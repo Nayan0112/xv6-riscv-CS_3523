@@ -32,7 +32,7 @@ main(int argc, char *argv[])
 
   // Fork to stress the memory/swap system with two processes concurrently
   int child_pid = -1;
-  //child_pid = fork();
+  child_pid = fork();
   int pid = getpid();
 
   // 1. Allocate space
@@ -44,6 +44,16 @@ main(int argc, char *argv[])
 
   // 2. WRITE initial unique data to each page
   // This triggers Page Faults -> vmfault -> kalloc
+
+
+  // a lazy attempt to test if the priority works or not 
+  if(getpid() == child_pid) pause(2);
+  else{
+    for(volatile int i = 0; i < 1e6; i++){
+      getpid();
+    }
+  }
+
   printf("PID %d: Step 1 - Writing initial patterns to %d pages...\n", pid, TEST_PAGES);
   for(int i = 0; i < TEST_PAGES; i++){
     buffer[i * PGSIZE] = (char)(i % 256);

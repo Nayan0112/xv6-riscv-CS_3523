@@ -29,6 +29,7 @@ main()
     fileinit();      // file table
     virtio_disk_init(); // emulated hard disk
     qinit();
+    sinit();
     userinit();      // first user process
     __sync_synchronize();
     started = 1;
@@ -41,7 +42,6 @@ main()
     trapinithart();   // install kernel trap vector
     plicinithart();   // ask PLIC for device interrupts
   }
-
   //scheduler(); 
   SC_MLFQ();      
 }

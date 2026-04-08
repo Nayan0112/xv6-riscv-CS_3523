@@ -1,115 +1,92 @@
-# Multi-Level Feedback Queue (MLFQ) Scheduler for xv6-riscv
+# Swap Subsystem for xv6-riscv
 
-This repository contains a high-concurrency, priority-based MLFQ scheduler implemented for the xv6-riscv operating system. The implementation is optimized for multi-core performance and features exponential aging, starvation prevention, and interactive process heuristics.
+This repository contains the architectural design and implementation of a highly concurrent Virtual Memory (VM) Management System for xv6-riscv. It features dual-mode `sbrk` allocation, a custom swap subsystem, and advanced concurrency controls to prevent multi-core memory corruption.
 
-## Table of Contents
-1. [Features](#features)
-2. [Implemented System Calls](#implemented-system-calls)
-3. [Scheduler Design & Decisions](#scheduler-design--decisions)
-4. [Technical Implementation & Locking](#technical-implementation--locking)
-5. [Experimental Analysis](#experimental-analysis)
-6. [AI Collaboration & Acknowledgments](#ai-collaboration--acknowledgments)
-7. [Usage](#usage)
-
----
-
-## Features
-* **4 Priority Queues**: Levels 0 (Highest) to 3 (Lowest).
-* **Exponential Time Quanta**: Quanta are doubled at each level (2, 4, 8, and 16 ticks).
-* **8-Core SMP Support**: Fully synchronized using spinlocks to run on up to 8 CPUs simultaneously.
-* **Interactive Process Protection**: Uses syscall frequency heuristics to keep responsive processes at high priority.
-* **Global Priority Boost**: Resets all process priorities every 128 ticks to prevent starvation.
+### Contents
+1. [Architectural Implementation: Eager vs. Lazy sbrk](#1-architectural-implementation-eager-vs-lazy-sbrk)
+2. [Swap Space Design: The PHYSTOP Decision](#2-swap-space-design-the-phystop-decision)
+3. [Challenges: Priority and System Call Interference](#3-challenges-priority-and-system-call-interference)
+4. [Test Case Design & Concurrency Faults](#4-test-case-design--concurrency-faults)
+5. [Contributor Statement & AI Collaboration](#5-contributor-statement--ai-collaboration)
+6. [Summary of Contributions](#6-summary-of-contributions)
 
 ---
 
-## Implemented System Calls
+### 1. Architectural Implementation: Eager vs. Lazy sbrk
+The kernel was designed to support two distinct memory allocation strategies. The primary challenge was ensuring that the core Swap Subsystem (Eviction and Fault Handling) remained agnostic to how the memory was initially requested.
 
-### 1. `getmlfqinfo(int pid, struct mlfqinfo *info)`
-Retrieves detailed scheduling statistics of a process. This was critical for the experimental evaluation of the scheduler.
-* **Data Provided**: Current level, total times scheduled, total syscalls, and an array of ticks spent at each level.
+**Eager Allocation (`sbrk`)**
+In the eager implementation, the `sys_sbrk` system call immediately invokes `growproc()`, which triggers `uvmalloc()`.
+* **Mechanism:** `uvmalloc` iterates through the requested page range and calls `kalloc()` for every page.
+* **Swap Integration:** If `kalloc()` fails due to memory pressure, the kernel immediately calls `evict_page()` to free a physical frame by moving an existing page to the swap disk.
+* **Benefit:** Memory availability is guaranteed at the time of the system call. If the swap space and RAM are both exhausted, `sbrk` fails early, preventing a late-runtime crash.
 
-### 2. `getlevel()`
-Returns the current MLFQ level (0-3) of the calling process, allowing user-space applications to monitor their own priority.
-
----
-
-## Scheduler Design & Decisions
-
-### 1. Exponential Aging ($2^x$)
-We implemented a time quantum of $2^L$ where $L$ is the level. 
-- **Level 0 (2 ticks)**: Designed for high responsiveness. 
-- **Level 3 (16 ticks)**: Designed for background throughput.
-This design assumes that if a process needs more than 14 ticks ($2+4+8$) of continuous CPU time, it is likely a compute-intensive task that should not interrupt highly responsive system processes.
-
-### 2. System-Call-Aware Heuristic
-The core requirement was to maintain interactive processes at high priority. We implemented the rule: **If $\Delta S \geq \Delta T$, do not demote.**
-- **Decision**: We use `dSysCount` to store the syscall count at the start of a level's quantum.
-- **Logic**: Even if a process uses its full 2 ticks in Level 0, if it made 2 or more syscalls, it is re-queued at Level 0. This ensures the shell and I/O-heavy drivers remain crisp and responsive under heavy CPU load.
-
-### 3. Inclusive Priority Boosting (Starvation Prevention)
-Standard MLFQ can lead to starvation if high-priority processes constantly arrive. 
-- **Decision**: Every 128 ticks, we reset the priority of all processes. 
-- **State Inclusion**: We specifically chose to boost processes in `RUNNABLE`, `RUNNING`, and `SLEEPING` states. Boosting `SLEEPING` processes ensures that when an I/O task finally wakes up, it starts at Level 0 rather than being "punished" for having been demoted before it went to sleep.
+**Lazy Allocation (`sbrk_lazy`)**
+The lazy implementation optimizes for speed and "on-demand" usage.
+* **Mechanism:** `sys_sbrk` merely increments the process size (`p->sz`) without allocating physical frames.
+* **Trap-Driven Allocation:** When the user first touches a lazy page, the CPU triggers a Page Fault (`scause 13` or `15`).
+* **Resolution:** The `vmfault()` handler intercepts the trap, identifies that the address is within the legal process size but unmapped, and allocates a zeroed physical page on the fly. If RAM is full during this fault, `evict_page()` is invoked exactly as it is in the eager version.
 
 ---
 
-## Technical Implementation & Locking
+### 2. Swap Space Design: The PHYSTOP Decision
+One of the most significant design decisions was the placement and mapping of the swap storage. In xv6, physical memory ends at `PHYSTOP`.
 
-### Concurrency Strategy
-Xv6 on 8 cores presents significant race conditions. To handle this, we implemented:
-1. **Per-Queue Spinlocks**: Each of the 4 priority queues has its own spinlock. This allows different cores to schedule processes from different levels simultaneously without a global bottleneck.
-2. **Lock Hierarchy**: We established a strict order: `wait_lock` -> `proc.lock` -> `pqueue.lock`. 
-3. **The "Pro" Syscall Pattern**: In `getmlfqinfo`, we scan the process table and copy data into a local buffer while holding the process lock, then perform the `copyout` to user space *after* releasing the lock. This prevents the kernel from holding a spinlock during a potentially slow memory operation.
-
----
-
-## Experimental Analysis
-
-We conducted stress tests using `p2_test` with 32 concurrent processes on an 8-CPU configuration. The following results were gathered (detailed logs available in `logs.txt`):
-
-### 1. Verification of Exponential Demotion
-We observed CPU-bound "hog" processes (e.g., PID 22) following the demotion path:
-- **Result**: `Ticks at Levels: [8, 12, 24, 122]`
-- **Analysis**: The $1:2:4$ ratio ($8:12:24$ ticks) corresponds to the process being boosted and subsequently demoted multiple times. Because $8/2 = 4$ and $12/4 = 3$, we can mathematically prove the process completed its quantum at Level 0 exactly 4 times and Level 1 exactly 3 times before the test concluded.
-
-### 2. Verification of Interactive Stability
-A syscall-heavy process (PID 4) was run alongside 31 CPU hogs.
-- **Result**: `Priority Level: 0`, `Ticks: [15, 0, 0, 0]`
-- **Analysis**: Despite the massive demand for CPU time from other processes, the syscall-aware logic successfully identified PID 4 as interactive. It consumed 15 total ticks but was never demoted to Level 1, ensuring zero latency degradation for interactive tasks.
-
-### 3. Global Boost Integrity
-- **Observation**: Multiple CPU hogs showed `Ticks at Level 0` greater than the quantum of 2.
-- **Analysis**: Since a CPU hog is demoted after exactly 2 ticks at Level 0, any value higher than 2 is physical proof that the 128-tick Global Boost successfully moved the process back to the top of the hierarchy.
-
-### 4. Deadlock and Stress Robustness
-The system was subjected to repeated cycles of forking and exiting 32 processes.
-- **Result**: No kernel panics or "acquire" lock hangs were observed.
-- **Conclusion**: The locking discipline between the scheduler and the timer interrupt handlers is stable under high contention.
+**The Global Swap Array**
+To avoid the overhead of a complex file system during low-level memory management, a global disk-backed array was simulated starting at `PHYSTOP`.
+* **Memory Mapping:** Using `kvmmap`, the kernel page table was modified to map a region starting from `SWAP_BASE` (defined as `PHYSTOP`) up to `MAX_SP * PGSIZE`.
+* **Size of the swap space** In `vm.c`, `SP_MAX` defines the maximum number of pages that can be offloaded to swap memory.
+* **Direct Access:** This allows the kernel to use `memmove` to transfer data between physical RAM and the swap region using simple pointer arithmetic: `SWAP_BASE + (index * PGSIZE)`.
+* **Synchronization:** A `swap_mask` bitmap was implemented to track free/used swap slots, protected by a dedicated `swap_l` spinlock to prevent two CPUs from claiming the same swap slot during concurrent evictions.
 
 ---
 
-## AI Collaboration & Acknowledgments
+### 3. Challenges: Priority and System Call Interference
+A major challenge arose from the interaction between the MLFQ (Multi-Level Feedback Queue) scheduler and the memory subsystem.
 
-This project was developed with the assistance of **Gemini (Google AI)** acting as a collaborative peer. The AI contributed to:
-* **Concurrency Debugging**: Identifying lock inversion risks in the `printf` and `wait_lock` paths during 8-core stress tests.
-* **Refining Code Quality**: Optimizing the `getmlfqinfo` syscall to separate locking from memory copying (`copyout`).
-* **Verification Logic**: Assisting in the design of the `p2_test` user program to capture per-process life cycle data.
-* **Documentation**: Assisting in the formatting and structuring of this analysis.
-
-The core scheduler logic, queue implementation, and syscall integration were designed and authored by the primary student developer.
+**The Priority Inversion Paradox**
+The MLFQ scheduler demotes processes that consume their entire time slice. However, the test cases rely heavily on read and write operations to verify data integrity.
+* **Challenge:** In xv6, read and write are system calls. If a process performs a system call, it often yields its remainder of the time slice.
+* **Observation:** This kept the test processes at a High Priority (Level 0) because they were technically "I/O bound" rather than "CPU bound."
+* **Impact on Swapping:** Because they stayed at Level 0, the `evict_page()` clock algorithm—which was designed to prefer evicting pages from lower-priority processes—had difficulty finding "ideal" victims, often forcing it to evict pages from the test process itself. This created a "thrashing" effect where a process would fault in a page, only to have it evicted again by its own next allocation.
 
 ---
 
-## Usage
+### 4. Test Case Design & Concurrency Faults
+The test suite was designed to stress-test the Data Integrity of the swap-round-trip. 
 
-### Compilation
-```bash
-make clean
-make qemu CPUS=8
+``` C
+  if(getpid() == child_pid) pause(2);
+  else{
+    for(volatile int i = 0; i < 1e6; i++){
+      getpid();
+    }
+  }
 ```
+This is a lazy attempt to make the parent process interactive and the child process cpu hogging/ non interactive to test out the page evictions. The findings were not too optimistic since the results are not consistnent to the inherent nature of code, i,e, depends if the child get executed before or the parent that decides who evicts whom first otherwise the low-priority process process can evict the parent in `pass 2`.
 
-### Execution
-To run the test in xv6:
-```bash
-p2_test
-```
+**Observational Analysis: Eager vs. Lazy Eviction Counts**
+
+During stress testing, a clear statistical and behavioral difference emerged between Eager and Lazy allocation regarding when evictions occur:
+
+1.    Eager Allocation (Honest upfront work): Triggered massive evictions (e.g., 1,700+ pages) immediately during the initial sbrk syscall. Because uvmalloc attempts to map all requested pages at once, it forces the system to evict existing RAM contents before the process even executes its first write instruction.
+
+2.    Lazy Allocation (Optimistic on-demand work): Showed zero swap-ins and deferred evictions during the initial allocation phase. The system only evicted pages one-by-one as the process actually touched the memory and triggered vmfault.
+
+`Conclusion`: Both approaches eventually converged to the same resident page limit (e.g., ~340 pages in physical RAM under heavy load). However, Eager proved to be more "honest" by validating disk/RAM capacity at allocation time, whereas Lazy deferred the heavy lifting and physical memory pressure to the middle of the program's execution.
+
+
+### 5. Contributor Statement & AI Collaboration
+This subsystem was developed in collaboration with **Gemini (Google AI)** acting as an architectural peer and debugging assistant. Key collaborative breakthroughs include:
+
+1. **Test Suite Development:** Co-designed the `p3_test.c` Data Integrity Test, utilizing a multi-pass write-read-modify-read methodology to aggressively trigger concurrency faults and verify that data survived the disk round-trip.
+2. **PTE  flags preservation:** The AI identified that eviction was erasing PTE flags. We implemented a fix to save the original `PTE_FLAGS` during `evict_page` and perfectly restore them during `vmfault`.
+
+3. **Root Cause Analysis:** Decoded hardware-level RISC-V faults (such as tracking down the `scause 12` instruction fault) and  TLB logic fixes.
+
+The core swap implementation, eager/lazy integration, physical mapping strategies, and MLFQ heuristics were designed and authored by the primary student developer.
+
+---
+
+### 6. Summary of Contributions
+The resulting system is a robust, concurrent-safe virtual memory manager. By implementing a clock-based eviction policy that respects process priority and execution state, the kernel successfully manages a virtual memory footprint significantly larger than the available physical RAM. The dual-mode `sbrk` support demonstrates a deep understanding of the trade-offs between proactive (eager) and reactive (lazy) resource management.
